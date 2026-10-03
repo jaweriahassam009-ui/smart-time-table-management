@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "203080951919",
+    "project_id": "smart-time-table-management",
+    "storage_bucket": "smart-time-table-management.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:203080951919:android:b2182fd1a5cc60117dc59a",
+        "android_client_info": {
+          "package_name": "com.example.flutter_application_1"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBEoIxvrMCA1vb1XhYFifbl1Et2uE0sixc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

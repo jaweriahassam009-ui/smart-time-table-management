@@ -1,0 +1,3726 @@
+import 'dart:math';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/material.dart';
+
+import 'firebase_options.dart';
+
+// ============================================================
+// MAIN
+// ============================================================
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  await AppData.loadFromFirestore();
+
+  runApp(const SmartTimeTableApp());
+}
+
+// ============================================================
+// APP
+// ============================================================
+
+class SmartTimeTableApp extends StatelessWidget {
+  const SmartTimeTableApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Smart Time Table Management',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorSchemeSeed: Colors.indigo,
+      ),
+      home: const HomePage(),
+    );
+  }
+}
+
+// ============================================================
+// TIMETABLE ENTRY
+// ============================================================
+
+class TimetableEntry {
+  final String className;
+  final String subject;
+  final String lecturer;
+  final String room;
+  final String day;
+  final String time;
+
+  TimetableEntry({
+    required this.className,
+    required this.subject,
+    required this.lecturer,
+    required this.room,
+    required this.day,
+    required this.time,
+  });
+
+  Map<String, dynamic> toMap() {
+    return {
+      'className': className,
+      'subject': subject,
+      'lecturer': lecturer,
+      'room': room,
+      'day': day,
+      'time': time,
+    };
+  }
+
+  factory TimetableEntry.fromMap(Map<String, dynamic> map) {
+    return TimetableEntry(
+      className: map['className']?.toString() ?? '',
+      subject: map['subject']?.toString() ?? '',
+      lecturer: map['lecturer']?.toString() ?? '',
+      room: map['room']?.toString() ?? '',
+      day: map['day']?.toString() ?? '',
+      time: map['time']?.toString() ?? '',
+    );
+  }
+}
+
+// ============================================================
+// APP DATA
+// ============================================================
+
+class AppData {
+  static final FirebaseFirestore _firestore =
+      FirebaseFirestore.instance;
+
+  static List<String> classes = [
+    'BSCS - 1A',
+    'BSCS - 1B',
+    'BSCS - 2A',
+  ];
+
+  static List<String> lecturers = [
+    'Dr. Ahmad Khan',
+    'Ms. Fatima Ali',
+    'Mr. Bilal Hussain',
+    'Dr. Sara Ahmed',
+  ];
+
+  static List<String> subjects = [
+    'Programming Fundamentals',
+    'Data Structures',
+    'Mathematics',
+    'English',
+    'Database Systems',
+    'Computer Networks',
+  ];
+
+  static List<String> rooms = [
+    'Room 101',
+    'Room 102',
+    'Room 103',
+    'Computer Lab',
+  ];
+
+  static List<String> timeSlots = [
+    '09:00 - 10:00',
+    '10:00 - 11:00',
+    '11:00 - 12:00',
+    '12:00 - 01:00',
+  ];
+
+  static List<String> workingDays = [
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+  ];
+
+  static Map<String, String> subjectLecturers = {
+    'Programming Fundamentals': 'Dr. Ahmad Khan',
+    'Data Structures': 'Ms. Fatima Ali',
+    'Mathematics': 'Mr. Bilal Hussain',
+    'English': 'Dr. Sara Ahmed',
+    'Database Systems': 'Dr. Ahmad Khan',
+    'Computer Networks': 'Ms. Fatima Ali',
+  };
+
+  static List<TimetableEntry> timetable = [];
+  static List<TimetableEntry> confirmedTimetable = [];
+  static List<TimetableEntry> previousTimetable = [];
+
+  static bool timetableConfirmed = false;
+
+  static String currentLecturerName = '';
+
+  // ==========================================================
+  // LOAD EVERYTHING
+  // ==========================================================
+
+  static Future<void> loadFromFirestore() async {
+    try {
+      final settingsDoc = await _firestore
+          .collection('app_data')
+          .doc('settings')
+          .get();
+
+      if (settingsDoc.exists) {
+        final data = settingsDoc.data();
+
+        if (data != null) {
+          if (data['classes'] is List) {
+            classes = List<String>.from(data['classes']);
+          }
+
+          if (data['subjects'] is List) {
+            subjects = List<String>.from(data['subjects']);
+          }
+
+          if (data['lecturers'] is List) {
+            lecturers = List<String>.from(data['lecturers']);
+          }
+
+          if (data['rooms'] is List) {
+            rooms = List<String>.from(data['rooms']);
+          }
+
+          if (data['timeSlots'] is List) {
+            timeSlots = List<String>.from(data['timeSlots']);
+          }
+
+          if (data['workingDays'] is List) {
+            workingDays = List<String>.from(data['workingDays']);
+          }
+
+          if (data['subjectLecturers'] is Map) {
+            subjectLecturers = Map<String, String>.from(
+              data['subjectLecturers'],
+            );
+          }
+        }
+      }
+
+      await loadConfirmedTimetableFromFirestore();
+      await loadPreviousTimetableFromFirestore();
+    } catch (e) {
+      debugPrint(
+        'Could not load data from Firebase: $e',
+      );
+    }
+  }
+
+  // ==========================================================
+  // LOAD CONFIRMED TIMETABLE
+  // ==========================================================
+
+  static Future<List<TimetableEntry>>
+      loadConfirmedTimetableFromFirestore() async {
+    try {
+      final doc = await _firestore
+          .collection('app_data')
+          .doc('confirmed_timetable')
+          .get();
+
+      if (!doc.exists) {
+        confirmedTimetable = [];
+        timetable = [];
+        timetableConfirmed = false;
+        return [];
+      }
+
+      final data = doc.data();
+
+      if (data == null || data['entries'] is! List) {
+        confirmedTimetable = [];
+        timetable = [];
+        timetableConfirmed = false;
+        return [];
+      }
+
+      final entries = _entriesFromFirestore(
+        data['entries'],
+      );
+
+      confirmedTimetable = entries;
+      timetable = List<TimetableEntry>.from(entries);
+      timetableConfirmed = entries.isNotEmpty;
+
+      return entries;
+    } catch (e) {
+      debugPrint(
+        'Could not load confirmed timetable: $e',
+      );
+      return [];
+    }
+  }
+
+  // ==========================================================
+  // LOAD PREVIOUS TIMETABLE
+  // ==========================================================
+
+  static Future<List<TimetableEntry>>
+      loadPreviousTimetableFromFirestore() async {
+    try {
+      final doc = await _firestore
+          .collection('app_data')
+          .doc('previous_timetable')
+          .get();
+
+      if (!doc.exists) {
+        previousTimetable = [];
+        return [];
+      }
+
+      final data = doc.data();
+
+      if (data == null || data['entries'] is! List) {
+        previousTimetable = [];
+        return [];
+      }
+
+      final entries = _entriesFromFirestore(
+        data['entries'],
+      );
+
+      previousTimetable = entries;
+
+      return entries;
+    } catch (e) {
+      debugPrint(
+        'Could not load previous timetable: $e',
+      );
+      return [];
+    }
+  }
+
+  // ==========================================================
+  // CONVERT FIRESTORE ENTRIES
+  // ==========================================================
+
+  static List<TimetableEntry> _entriesFromFirestore(
+    dynamic value,
+  ) {
+    if (value is! List) {
+      return [];
+    }
+
+    final List<TimetableEntry> result = [];
+
+    for (final item in value) {
+      if (item is Map) {
+        final converted = item.map(
+          (key, value) => MapEntry(
+            key.toString(),
+            value,
+          ),
+        );
+
+        result.add(
+          TimetableEntry.fromMap(
+            Map<String, dynamic>.from(converted),
+          ),
+        );
+      }
+    }
+
+    return result;
+  }
+
+  // ==========================================================
+  // SAVE SETTINGS
+  // ==========================================================
+
+  static Future<void> saveSettings() async {
+    try {
+      await _firestore
+          .collection('app_data')
+          .doc('settings')
+          .set({
+        'classes': classes,
+        'subjects': subjects,
+        'lecturers': lecturers,
+        'rooms': rooms,
+        'timeSlots': timeSlots,
+        'workingDays': workingDays,
+        'subjectLecturers': subjectLecturers,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      debugPrint(
+        'Settings saved successfully.',
+      );
+    } catch (e) {
+      debugPrint(
+        'Could not save settings: $e',
+      );
+    }
+  }
+
+  // ==========================================================
+  // SAVE CONFIRMED TIMETABLE
+  // ==========================================================
+
+  static Future<void> saveConfirmedTimetable() async {
+    try {
+      await _firestore
+          .collection('app_data')
+          .doc('confirmed_timetable')
+          .set({
+        'confirmed': true,
+        'entries': confirmedTimetable
+            .map(
+              (entry) => entry.toMap(),
+            )
+            .toList(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      debugPrint(
+        'Confirmed timetable saved successfully.',
+      );
+    } catch (e) {
+      debugPrint(
+        'Could not save confirmed timetable: $e',
+      );
+      rethrow;
+    }
+  }
+
+  // ==========================================================
+  // SAVE PREVIOUS TIMETABLE
+  // ==========================================================
+
+  static Future<void> savePreviousTimetable() async {
+    try {
+      await _firestore
+          .collection('app_data')
+          .doc('previous_timetable')
+          .set({
+        'entries': previousTimetable
+            .map(
+              (entry) => entry.toMap(),
+            )
+            .toList(),
+        'hasPreviousTimetable':
+            previousTimetable.isNotEmpty,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      debugPrint(
+        'Previous timetable saved: '
+        '${previousTimetable.length} entries.',
+      );
+    } catch (e) {
+      debugPrint(
+        'Could not save previous timetable: $e',
+      );
+      rethrow;
+    }
+  }
+}
+
+// ============================================================
+// HOME PAGE
+// ============================================================
+
+class HomePage extends StatelessWidget {
+  const HomePage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Smart Time Table Management',
+        ),
+        centerTitle: true,
+      ),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(30),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: 900,
+            ),
+            child: Column(
+              children: [
+                const Icon(
+                  Icons.calendar_month,
+                  size: 90,
+                  color: Colors.indigo,
+                ),
+                const SizedBox(height: 20),
+                const Text(
+                  'Smart Time Table Management',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 15),
+                const Text(
+                  'Generate flexible and conflict-aware '
+                  'timetables using intelligent scheduling.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 17),
+                ),
+                const SizedBox(height: 35),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  alignment: WrapAlignment.center,
+                  children: const [
+                    Chip(
+                      avatar: Icon(
+                        Icons.auto_awesome,
+                      ),
+                      label: Text(
+                        'Genetic Algorithm',
+                      ),
+                    ),
+                    Chip(
+                      avatar: Icon(
+                        Icons.warning_amber,
+                      ),
+                      label: Text(
+                        'Conflict Detection',
+                      ),
+                    ),
+                    Chip(
+                      avatar: Icon(
+                        Icons.admin_panel_settings,
+                      ),
+                      label: Text(
+                        'Admin Management',
+                      ),
+                    ),
+                    Chip(
+                      avatar: Icon(
+                        Icons.person,
+                      ),
+                      label: Text(
+                        'Lecturer Portal',
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 40),
+                Wrap(
+                  spacing: 15,
+                  runSpacing: 15,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                const AdminLoginPage(),
+                          ),
+                        );
+                      },
+                      icon: const Icon(
+                        Icons.admin_panel_settings,
+                      ),
+                      label: const Text(
+                        'Admin Login',
+                      ),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                const LecturerLoginPage(),
+                          ),
+                        );
+                      },
+                      icon: const Icon(
+                        Icons.person,
+                      ),
+                      label: const Text(
+                        'Lecturer Login',
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// ADMIN LOGIN
+// ============================================================
+
+class AdminLoginPage extends StatefulWidget {
+  const AdminLoginPage({super.key});
+
+  @override
+  State<AdminLoginPage> createState() =>
+      _AdminLoginPageState();
+}
+
+class _AdminLoginPageState
+    extends State<AdminLoginPage> {
+  final emailController =
+      TextEditingController();
+
+  final passwordController =
+      TextEditingController();
+
+  bool loading = false;
+
+  Future<void> login() async {
+    final email =
+        emailController.text.trim();
+
+    final password =
+        passwordController.text.trim();
+
+    if (email.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Please enter email and password.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      loading = true;
+    });
+
+    try {
+      final credential = await FirebaseAuth
+          .instance
+          .signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+
+      if (credential.user == null) {
+        throw Exception(
+          'User authentication failed.',
+        );
+      }
+
+      final query = await FirebaseFirestore
+          .instance
+          .collection('users')
+          .where(
+            'email',
+            isEqualTo: email,
+          )
+          .limit(1)
+          .get();
+
+      if (query.docs.isEmpty) {
+        throw Exception(
+          'User record not found in Firestore.',
+        );
+      }
+
+      final data =
+          query.docs.first.data();
+
+      if (data['role'] != 'admin') {
+        throw Exception(
+          'This account is not an admin account.',
+        );
+      }
+
+      if (!mounted) return;
+
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) =>
+              const AdminDashboard(),
+        ),
+      );
+    } on FirebaseAuthException catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            e.message ?? 'Login failed.',
+          ),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            e.toString(),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          loading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    emailController.dispose();
+    passwordController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Admin Login',
+        ),
+      ),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(30),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: 450,
+            ),
+            child: Column(
+              children: [
+                const Icon(
+                  Icons.admin_panel_settings,
+                  size: 80,
+                  color: Colors.indigo,
+                ),
+                const SizedBox(height: 25),
+                TextField(
+                  controller: emailController,
+                  decoration:
+                      const InputDecoration(
+                    labelText: 'Email',
+                    prefixIcon:
+                        Icon(Icons.email),
+                    border:
+                        OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 15),
+                TextField(
+                  controller:
+                      passwordController,
+                  obscureText: true,
+                  decoration:
+                      const InputDecoration(
+                    labelText: 'Password',
+                    prefixIcon:
+                        Icon(Icons.lock),
+                    border:
+                        OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 25),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed:
+                        loading ? null : login,
+                    child: loading
+                        ? const SizedBox(
+                            height: 22,
+                            width: 22,
+                            child:
+                                CircularProgressIndicator(
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Text(
+                            'Login',
+                          ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// ADMIN DASHBOARD
+// ============================================================
+
+class AdminDashboard
+    extends StatelessWidget {
+  const AdminDashboard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final cards = [
+      {
+        'title': 'Manage Classes',
+        'icon': Icons.class_,
+        'page': const ManagementPage(),
+      },
+      {
+        'title': 'Manage Subjects',
+        'icon': Icons.menu_book,
+        'page': const SubjectsPage(),
+      },
+      {
+        'title': 'Manage Lecturers',
+        'icon': Icons.people,
+        'page': const LecturersPage(),
+      },
+      {
+        'title': 'Manage Rooms & Time Slots',
+        'icon': Icons.meeting_room,
+        'page': const ResourcesPage(),
+      },
+      {
+        'title': 'Working Days',
+        'icon': Icons.calendar_today,
+        'page': const WorkingDaysPage(),
+      },
+      {
+        'title': 'Generate Timetable',
+        'icon': Icons.auto_awesome,
+        'page': const GeneticAlgorithmPage(),
+      },
+      {
+        'title': 'Problem Detection',
+        'icon': Icons.warning_amber,
+        'page': const ConflictDetectionPage(),
+      },
+      {
+        'title': 'Previous Timetable',
+        'icon': Icons.history,
+        'page': const PreviousTimetablePage(),
+      },
+    ];
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Admin Dashboard',
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Logout',
+            onPressed: () async {
+              await FirebaseAuth
+                  .instance
+                  .signOut();
+
+              if (!context.mounted) return;
+
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      const HomePage(),
+                ),
+                (route) => false,
+              );
+            },
+            icon: const Icon(
+              Icons.logout,
+            ),
+          ),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(25),
+        child: GridView.builder(
+          itemCount: cards.length,
+          gridDelegate:
+              const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 320,
+            mainAxisExtent: 180,
+            crossAxisSpacing: 20,
+            mainAxisSpacing: 20,
+          ),
+          itemBuilder: (
+            context,
+            index,
+          ) {
+            final card = cards[index];
+
+            return Card(
+              elevation: 4,
+              child: InkWell(
+                borderRadius:
+                    BorderRadius.circular(12),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          card['page']
+                              as Widget,
+                    ),
+                  );
+                },
+                child: Column(
+                  mainAxisAlignment:
+                      MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      card['icon']
+                          as IconData,
+                      size: 50,
+                      color: Colors.indigo,
+                    ),
+                    const SizedBox(
+                      height: 15,
+                    ),
+                    Padding(
+                      padding:
+                          const EdgeInsets
+                              .symmetric(
+                        horizontal: 10,
+                      ),
+                      child: Text(
+                        card['title']
+                            as String,
+                        textAlign:
+                            TextAlign.center,
+                        style:
+                            const TextStyle(
+                          fontSize: 18,
+                          fontWeight:
+                              FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// MANAGE CLASSES
+// ============================================================
+
+class ManagementPage
+    extends StatefulWidget {
+  const ManagementPage({super.key});
+
+  @override
+  State<ManagementPage> createState() =>
+      _ManagementPageState();
+}
+
+class _ManagementPageState
+    extends State<ManagementPage> {
+  final controller =
+      TextEditingController();
+
+  Future<void> addClass() async {
+    final value =
+        controller.text.trim();
+
+    if (value.isEmpty) return;
+
+    if (AppData.classes.contains(value)) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Class already exists.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      AppData.classes.add(value);
+      controller.clear();
+    });
+
+    await AppData.saveSettings();
+  }
+
+  Future<void> deleteClass(
+    String className,
+  ) async {
+    setState(() {
+      AppData.classes
+          .remove(className);
+    });
+
+    await AppData.saveSettings();
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Manage Classes',
+        ),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(25),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    decoration:
+                        const InputDecoration(
+                      labelText:
+                          'Class name',
+                      border:
+                          OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                const SizedBox(
+                  width: 10,
+                ),
+                ElevatedButton(
+                  onPressed: addClass,
+                  child: const Text(
+                    'Add',
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(
+              height: 25,
+            ),
+            Expanded(
+              child: ListView.builder(
+                itemCount:
+                    AppData.classes.length,
+                itemBuilder: (
+                  context,
+                  index,
+                ) {
+                  final item =
+                      AppData.classes[
+                          index];
+
+                  return Card(
+                    child: ListTile(
+                      leading:
+                          const Icon(
+                        Icons.class_,
+                        color:
+                            Colors.indigo,
+                      ),
+                      title: Text(item),
+                      trailing:
+                          IconButton(
+                        icon:
+                            const Icon(
+                          Icons.delete,
+                          color:
+                              Colors.red,
+                        ),
+                        onPressed: () =>
+                            deleteClass(
+                          item,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// MANAGE SUBJECTS
+// ============================================================
+
+class SubjectsPage
+    extends StatefulWidget {
+  const SubjectsPage({super.key});
+
+  @override
+  State<SubjectsPage> createState() =>
+      _SubjectsPageState();
+}
+
+class _SubjectsPageState
+    extends State<SubjectsPage> {
+  final controller =
+      TextEditingController();
+
+  Future<void> addSubject() async {
+    final value =
+        controller.text.trim();
+
+    if (value.isEmpty) return;
+
+    if (AppData.subjects.contains(value)) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Subject already exists.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      AppData.subjects.add(value);
+      controller.clear();
+    });
+
+    await AppData.saveSettings();
+  }
+
+  Future<void> deleteSubject(
+    String subject,
+  ) async {
+    setState(() {
+      AppData.subjects.remove(subject);
+    });
+
+    await AppData.saveSettings();
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Manage Subjects',
+        ),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(25),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    decoration:
+                        const InputDecoration(
+                      labelText:
+                          'Subject name',
+                      border:
+                          OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                const SizedBox(
+                  width: 10,
+                ),
+                ElevatedButton(
+                  onPressed: addSubject,
+                  child: const Text(
+                    'Add',
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(
+              height: 25,
+            ),
+            Expanded(
+              child: ListView.builder(
+                itemCount:
+                    AppData.subjects.length,
+                itemBuilder: (
+                  context,
+                  index,
+                ) {
+                  final item =
+                      AppData.subjects[
+                          index];
+
+                  return Card(
+                    child: ListTile(
+                      leading:
+                          const Icon(
+                        Icons.menu_book,
+                        color:
+                            Colors.indigo,
+                      ),
+                      title: Text(item),
+                      trailing:
+                          IconButton(
+                        icon:
+                            const Icon(
+                          Icons.delete,
+                          color:
+                              Colors.red,
+                        ),
+                        onPressed: () =>
+                            deleteSubject(
+                          item,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// MANAGE LECTURERS
+// ============================================================
+
+class LecturersPage
+    extends StatefulWidget {
+  const LecturersPage({super.key});
+
+  @override
+  State<LecturersPage> createState() =>
+      _LecturersPageState();
+}
+
+class _LecturersPageState
+    extends State<LecturersPage> {
+  final controller =
+      TextEditingController();
+
+  Future<void> addLecturer() async {
+    final value =
+        controller.text.trim();
+
+    if (value.isEmpty) return;
+
+    if (AppData.lecturers.contains(value)) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Lecturer already exists.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      AppData.lecturers.add(value);
+      controller.clear();
+    });
+
+    await AppData.saveSettings();
+  }
+
+  Future<void> deleteLecturer(
+    String lecturer,
+  ) async {
+    setState(() {
+      AppData.lecturers
+          .remove(lecturer);
+    });
+
+    await AppData.saveSettings();
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Manage Lecturers',
+        ),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(25),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    decoration:
+                        const InputDecoration(
+                      labelText:
+                          'Lecturer name',
+                      border:
+                          OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                const SizedBox(
+                  width: 10,
+                ),
+                ElevatedButton(
+                  onPressed:
+                      addLecturer,
+                  child: const Text(
+                    'Add',
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(
+              height: 25,
+            ),
+            Expanded(
+              child: ListView.builder(
+                itemCount:
+                    AppData.lecturers.length,
+                itemBuilder: (
+                  context,
+                  index,
+                ) {
+                  final item =
+                      AppData.lecturers[
+                          index];
+
+                  return Card(
+                    child: ListTile(
+                      leading:
+                          const Icon(
+                        Icons.person,
+                        color:
+                            Colors.indigo,
+                      ),
+                      title: Text(item),
+                      trailing:
+                          IconButton(
+                        icon:
+                            const Icon(
+                          Icons.delete,
+                          color:
+                              Colors.red,
+                        ),
+                        onPressed: () =>
+                            deleteLecturer(
+                          item,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// MANAGE ROOMS & TIME SLOTS
+// ============================================================
+
+class ResourcesPage
+    extends StatefulWidget {
+  const ResourcesPage({super.key});
+
+  @override
+  State<ResourcesPage> createState() =>
+      _ResourcesPageState();
+}
+
+class _ResourcesPageState
+    extends State<ResourcesPage> {
+  final roomController =
+      TextEditingController();
+
+  final timeController =
+      TextEditingController();
+
+  bool saving = false;
+
+  Future<void> addRoom() async {
+    final value =
+        roomController.text.trim();
+
+    if (value.isEmpty) return;
+
+    if (AppData.rooms.contains(value)) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Room already exists.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      AppData.rooms.add(value);
+      roomController.clear();
+      saving = true;
+    });
+
+    await AppData.saveSettings();
+
+    if (!mounted) return;
+
+    setState(() {
+      saving = false;
+    });
+
+    ScaffoldMessenger.of(context)
+        .showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Room added and saved successfully.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> deleteRoom(
+    String room,
+  ) async {
+    setState(() {
+      AppData.rooms.remove(room);
+      saving = true;
+    });
+
+    await AppData.saveSettings();
+
+    if (!mounted) return;
+
+    setState(() {
+      saving = false;
+    });
+  }
+
+  Future<void> addTimeSlot() async {
+    final value =
+        timeController.text.trim();
+
+    if (value.isEmpty) return;
+
+    if (AppData.timeSlots.contains(value)) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Time slot already exists.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      AppData.timeSlots.add(value);
+      timeController.clear();
+      saving = true;
+    });
+
+    await AppData.saveSettings();
+
+    if (!mounted) return;
+
+    setState(() {
+      saving = false;
+    });
+
+    ScaffoldMessenger.of(context)
+        .showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Time slot added and saved successfully.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> deleteTimeSlot(
+    String timeSlot,
+  ) async {
+    setState(() {
+      AppData.timeSlots
+          .remove(timeSlot);
+      saving = true;
+    });
+
+    await AppData.saveSettings();
+
+    if (!mounted) return;
+
+    setState(() {
+      saving = false;
+    });
+  }
+
+  @override
+  void dispose() {
+    roomController.dispose();
+    timeController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Manage Rooms & Time Slots',
+        ),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(25),
+        child: Column(
+          children: [
+            // ==================================================
+            // ROOMS
+            // ==================================================
+
+            Card(
+              elevation: 3,
+              child: Padding(
+                padding:
+                    const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(
+                          Icons.meeting_room,
+                          color:
+                              Colors.indigo,
+                        ),
+                        SizedBox(width: 10),
+                        Text(
+                          'Manage Rooms',
+                          style:
+                              TextStyle(
+                            fontSize: 22,
+                            fontWeight:
+                                FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(
+                      height: 20,
+                    ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child:
+                              TextField(
+                            controller:
+                                roomController,
+                            decoration:
+                                const InputDecoration(
+                              labelText:
+                                  'Room name',
+                              hintText:
+                                  'Example: Room 104',
+                              border:
+                                  OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(
+                          width: 10,
+                        ),
+                        ElevatedButton.icon(
+                          onPressed:
+                              saving
+                                  ? null
+                                  : addRoom,
+                          icon:
+                              const Icon(
+                            Icons.add,
+                          ),
+                          label:
+                              const Text(
+                            'Add Room',
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(
+                      height: 20,
+                    ),
+                    if (AppData.rooms
+                        .isEmpty)
+                      const Text(
+                        'No rooms available.',
+                      )
+                    else
+                      ...AppData.rooms
+                          .map(
+                        (room) => Card(
+                          child:
+                              ListTile(
+                            leading:
+                                const Icon(
+                              Icons
+                                  .meeting_room,
+                              color: Colors
+                                  .indigo,
+                            ),
+                            title:
+                                Text(room),
+                            trailing:
+                                IconButton(
+                              tooltip:
+                                  'Delete Room',
+                              icon:
+                                  const Icon(
+                                Icons.delete,
+                                color: Colors
+                                    .red,
+                              ),
+                              onPressed:
+                                  saving
+                                      ? null
+                                      : () =>
+                                          deleteRoom(
+                                        room,
+                                      ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(
+              height: 25,
+            ),
+
+            // ==================================================
+            // TIME SLOTS
+            // ==================================================
+
+            Card(
+              elevation: 3,
+              child: Padding(
+                padding:
+                    const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(
+                          Icons.access_time,
+                          color:
+                              Colors.indigo,
+                        ),
+                        SizedBox(width: 10),
+                        Text(
+                          'Manage Time Slots',
+                          style:
+                              TextStyle(
+                            fontSize: 22,
+                            fontWeight:
+                                FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(
+                      height: 20,
+                    ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child:
+                              TextField(
+                            controller:
+                                timeController,
+                            decoration:
+                                const InputDecoration(
+                              labelText:
+                                  'Time slot',
+                              hintText:
+                                  'Example: 01:00 - 02:00',
+                              border:
+                                  OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(
+                          width: 10,
+                        ),
+                        ElevatedButton.icon(
+                          onPressed:
+                              saving
+                                  ? null
+                                  : addTimeSlot,
+                          icon:
+                              const Icon(
+                            Icons.add,
+                          ),
+                          label:
+                              const Text(
+                            'Add Time',
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(
+                      height: 20,
+                    ),
+                    if (AppData
+                        .timeSlots
+                        .isEmpty)
+                      const Text(
+                        'No time slots available.',
+                      )
+                    else
+                      ...AppData.timeSlots
+                          .map(
+                        (time) => Card(
+                          child:
+                              ListTile(
+                            leading:
+                                const Icon(
+                              Icons
+                                  .access_time,
+                              color: Colors
+                                  .indigo,
+                            ),
+                            title:
+                                Text(time),
+                            trailing:
+                                IconButton(
+                              tooltip:
+                                  'Delete Time Slot',
+                              icon:
+                                  const Icon(
+                                Icons.delete,
+                                color: Colors
+                                    .red,
+                              ),
+                              onPressed:
+                                  saving
+                                      ? null
+                                      : () =>
+                                          deleteTimeSlot(
+                                        time,
+                                      ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(
+              height: 20,
+            ),
+
+            if (saving)
+              const CircularProgressIndicator(),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// WORKING DAYS
+// ============================================================
+
+class WorkingDaysPage
+    extends StatelessWidget {
+  const WorkingDaysPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Working Days',
+        ),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(25),
+        child: Column(
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Working Days',
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight:
+                    FontWeight.bold,
+              ),
+            ),
+            const SizedBox(
+              height: 15,
+            ),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: AppData
+                  .workingDays
+                  .map(
+                (day) => Chip(
+                  avatar:
+                      const Icon(
+                    Icons
+                        .calendar_today,
+                    size: 18,
+                  ),
+                  label: Text(day),
+                ),
+              )
+                  .toList(),
+            ),
+            const SizedBox(
+              height: 35,
+            ),
+            const Text(
+              'Lecture Time Slots',
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight:
+                    FontWeight.bold,
+              ),
+            ),
+            const SizedBox(
+              height: 15,
+            ),
+            ...AppData.timeSlots.map(
+              (time) => Card(
+                child: ListTile(
+                  leading:
+                      const Icon(
+                    Icons.access_time,
+                    color:
+                        Colors.indigo,
+                  ),
+                  title: Text(time),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// TIMETABLE GENERATOR
+// ============================================================
+
+class GeneticAlgorithmPage
+    extends StatefulWidget {
+  const GeneticAlgorithmPage({
+    super.key,
+  });
+
+  @override
+  State<GeneticAlgorithmPage>
+      createState() =>
+          _GeneticAlgorithmPageState();
+}
+
+class _GeneticAlgorithmPageState
+    extends State<
+        GeneticAlgorithmPage> {
+  bool generating = false;
+
+  String status =
+      'Ready to generate timetable.';
+
+  Future<void> generateTimetable() async {
+    if (AppData.classes.isEmpty) {
+      setState(() {
+        status =
+            'Please add at least one class.';
+      });
+      return;
+    }
+
+    if (AppData.subjects.isEmpty) {
+      setState(() {
+        status =
+            'Please add at least one subject.';
+      });
+      return;
+    }
+
+    if (AppData.lecturers.isEmpty) {
+      setState(() {
+        status =
+            'Please add at least one lecturer.';
+      });
+      return;
+    }
+
+    if (AppData.rooms.isEmpty) {
+      setState(() {
+        status =
+            'No rooms available.';
+      });
+      return;
+    }
+
+    if (AppData.timeSlots.isEmpty) {
+      setState(() {
+        status =
+            'No time slots available.';
+      });
+      return;
+    }
+
+    if (AppData.workingDays.isEmpty) {
+      setState(() {
+        status =
+            'No working days available.';
+      });
+      return;
+    }
+
+    setState(() {
+      generating = true;
+      status =
+          'Generating timetable...';
+    });
+
+    try {
+      // Save current confirmed timetable
+      // as previous timetable.
+      if (AppData
+          .confirmedTimetable
+          .isNotEmpty) {
+        AppData.previousTimetable =
+            List<TimetableEntry>.from(
+          AppData.confirmedTimetable,
+        );
+
+        await AppData
+            .savePreviousTimetable();
+      }
+
+      final random = Random();
+
+      final generated =
+          <TimetableEntry>[];
+
+      int globalCounter = 0;
+
+      for (final className
+          in AppData.classes) {
+        final shuffledSubjects =
+            List<String>.from(
+          AppData.subjects,
+        );
+
+        shuffledSubjects.shuffle(
+          random,
+        );
+
+        final maxSubjects = min(
+          shuffledSubjects.length,
+          AppData.timeSlots.length,
+        );
+
+        for (
+          int i = 0;
+          i < maxSubjects;
+          i++
+        ) {
+          final subject =
+              shuffledSubjects[i];
+
+          final day =
+              AppData.workingDays[
+                  globalCounter %
+                      AppData
+                          .workingDays
+                          .length];
+
+          final time =
+              AppData.timeSlots[
+                  globalCounter %
+                      AppData
+                          .timeSlots
+                          .length];
+
+          final room =
+              AppData.rooms[
+                  globalCounter %
+                      AppData.rooms
+                          .length];
+
+          final lecturer =
+              AppData.lecturers[
+                  globalCounter %
+                      AppData
+                          .lecturers
+                          .length];
+
+          generated.add(
+            TimetableEntry(
+              className: className,
+              subject: subject,
+              lecturer: lecturer,
+              room: room,
+              day: day,
+              time: time,
+            ),
+          );
+
+          globalCounter++;
+        }
+      }
+
+      await Future.delayed(
+        const Duration(
+          milliseconds: 800,
+        ),
+      );
+
+      AppData.timetable =
+          generated;
+
+      if (!mounted) return;
+
+      setState(() {
+        status =
+            'Timetable generated successfully. '
+            '${generated.length} entries created.';
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        status =
+            'Generation failed: $e';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          generating = false;
+        });
+      }
+    }
+  }
+
+  Future<void> confirmTimetable() async {
+    if (AppData.timetable.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Generate a timetable first.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    try {
+      AppData.confirmedTimetable =
+          List<TimetableEntry>.from(
+        AppData.timetable,
+      );
+
+      AppData.timetableConfirmed =
+          true;
+
+      await AppData
+          .saveConfirmedTimetable();
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Timetable confirmed and saved to Firebase successfully.',
+          ),
+        ),
+      );
+
+      setState(() {
+        status =
+            'Timetable confirmed and saved successfully.';
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not save timetable: $e',
+          ),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Generate Timetable',
+        ),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(25),
+        child: Column(
+          children: [
+            Card(
+              child: Padding(
+                padding:
+                    const EdgeInsets.all(20),
+                child: Column(
+                  children: [
+                    const Icon(
+                      Icons.auto_awesome,
+                      size: 60,
+                      color:
+                          Colors.indigo,
+                    ),
+                    const SizedBox(
+                      height: 15,
+                    ),
+                    const Text(
+                      'Smart Timetable Generator',
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight:
+                            FontWeight.bold,
+                      ),
+                      textAlign:
+                          TextAlign.center,
+                    ),
+                    const SizedBox(
+                      height: 10,
+                    ),
+                    const Text(
+                      'Generate a flexible timetable using '
+                      'intelligent scheduling logic.',
+                      textAlign:
+                          TextAlign.center,
+                    ),
+                    const SizedBox(
+                      height: 25,
+                    ),
+                    SizedBox(
+                      width:
+                          double.infinity,
+                      child:
+                          ElevatedButton.icon(
+                        onPressed:
+                            generating
+                                ? null
+                                : generateTimetable,
+                        icon: generating
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child:
+                                    CircularProgressIndicator(
+                                  strokeWidth:
+                                      2,
+                                ),
+                              )
+                            : const Icon(
+                                Icons
+                                    .play_arrow,
+                              ),
+                        label: Text(
+                          generating
+                              ? 'Generating...'
+                              : 'Generate Timetable',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(
+                      height: 10,
+                    ),
+                    SizedBox(
+                      width:
+                          double.infinity,
+                      child:
+                          OutlinedButton.icon(
+                        onPressed:
+                            AppData
+                                    .timetable
+                                    .isEmpty
+                                ? null
+                                : confirmTimetable,
+                        icon:
+                            const Icon(
+                          Icons
+                              .check_circle,
+                        ),
+                        label:
+                            const Text(
+                          'Confirm Timetable',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(
+              height: 20,
+            ),
+            Text(
+              status,
+              textAlign:
+                  TextAlign.center,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight:
+                    FontWeight.w500,
+              ),
+            ),
+            const SizedBox(
+              height: 20,
+            ),
+            Expanded(
+              child: AppData
+                      .timetable
+                      .isEmpty
+                  ? const Center(
+                      child: Text(
+                        'No timetable generated yet.',
+                        style:
+                            TextStyle(
+                          fontSize: 17,
+                        ),
+                      ),
+                    )
+                  : TimetableTable(
+                      timetable:
+                          AppData.timetable,
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// PROBLEM / CONFLICT DETECTION
+// ============================================================
+
+class ConflictDetectionPage
+    extends StatefulWidget {
+  const ConflictDetectionPage({
+    super.key,
+  });
+
+  @override
+  State<ConflictDetectionPage>
+      createState() =>
+          _ConflictDetectionPageState();
+}
+
+class _ConflictDetectionPageState
+    extends State<
+        ConflictDetectionPage> {
+  List<String> conflicts = [];
+
+  bool checking = false;
+
+  @override
+  void initState() {
+    super.initState();
+    checkConflicts();
+  }
+
+  Future<void> checkConflicts() async {
+    setState(() {
+      checking = true;
+      conflicts = [];
+    });
+
+    await AppData
+        .loadConfirmedTimetableFromFirestore();
+
+    final entries =
+        AppData.confirmedTimetable;
+
+    final found = <String>[];
+
+    for (
+      int i = 0;
+      i < entries.length;
+      i++
+    ) {
+      for (
+        int j = i + 1;
+        j < entries.length;
+        j++
+      ) {
+        final a = entries[i];
+        final b = entries[j];
+
+        final sameSlot =
+            a.day == b.day &&
+            a.time == b.time;
+
+        if (!sameSlot) continue;
+
+        if (a.className ==
+            b.className) {
+          found.add(
+            'Class conflict: '
+            '${a.className} has '
+            '${a.subject} and '
+            '${b.subject} at '
+            '${a.day}, ${a.time}.',
+          );
+        }
+
+        if (a.lecturer ==
+            b.lecturer) {
+          found.add(
+            'Lecturer conflict: '
+            '${a.lecturer} is assigned '
+            'to ${a.subject} and '
+            '${b.subject} at '
+            '${a.day}, ${a.time}.',
+          );
+        }
+
+        if (a.room == b.room) {
+          found.add(
+            'Room conflict: '
+            '${a.room} is assigned to '
+            '${a.subject} and '
+            '${b.subject} at '
+            '${a.day}, ${a.time}.',
+          );
+        }
+      }
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      conflicts =
+          found.toSet().toList();
+
+      checking = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Problem Detection',
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Check Again',
+            onPressed:
+                checking
+                    ? null
+                    : checkConflicts,
+            icon: const Icon(
+              Icons.refresh,
+            ),
+          ),
+        ],
+      ),
+      body: checking
+          ? const Center(
+              child:
+                  CircularProgressIndicator(),
+            )
+          : AppData
+                  .confirmedTimetable
+                  .isEmpty
+              ? const Center(
+                  child: Padding(
+                    padding:
+                        EdgeInsets.all(25),
+                    child: Text(
+                      'No confirmed timetable is available '
+                      'for conflict detection.',
+                      textAlign:
+                          TextAlign.center,
+                      style:
+                          TextStyle(
+                        fontSize: 18,
+                      ),
+                    ),
+                  ),
+                )
+              : conflicts.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment:
+                            MainAxisAlignment
+                                .center,
+                        children: [
+                          const Icon(
+                            Icons
+                                .check_circle,
+                            size: 80,
+                            color:
+                                Colors.green,
+                          ),
+                          const SizedBox(
+                            height: 20,
+                          ),
+                          const Text(
+                            'No timetable conflicts detected.',
+                            textAlign:
+                                TextAlign
+                                    .center,
+                            style:
+                                TextStyle(
+                              fontSize: 20,
+                              fontWeight:
+                                  FontWeight
+                                      .bold,
+                            ),
+                          ),
+                          const SizedBox(
+                            height: 20,
+                          ),
+                          ElevatedButton
+                              .icon(
+                            onPressed:
+                                checkConflicts,
+                            icon:
+                                const Icon(
+                              Icons.refresh,
+                            ),
+                            label:
+                                const Text(
+                              'Check Again',
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView.builder(
+                      padding:
+                          const EdgeInsets
+                              .all(25),
+                      itemCount:
+                          conflicts.length,
+                      itemBuilder: (
+                        context,
+                        index,
+                      ) {
+                        return Card(
+                          child:
+                              ListTile(
+                            leading:
+                                const Icon(
+                              Icons
+                                  .warning_amber,
+                              color:
+                                  Colors.orange,
+                            ),
+                            title: Text(
+                              conflicts[
+                                  index],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+    );
+  }
+}
+
+// ============================================================
+// PREVIOUS TIMETABLE
+// ============================================================
+
+class PreviousTimetablePage
+    extends StatefulWidget {
+  const PreviousTimetablePage({
+    super.key,
+  });
+
+  @override
+  State<PreviousTimetablePage>
+      createState() =>
+          _PreviousTimetablePageState();
+}
+
+class _PreviousTimetablePageState
+    extends State<
+        PreviousTimetablePage> {
+  List<TimetableEntry>
+      previousTimetable = [];
+
+  bool loading = true;
+
+  String? errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    loadPreviousTimetable();
+  }
+
+  Future<void> loadPreviousTimetable() async {
+    setState(() {
+      loading = true;
+      errorMessage = null;
+    });
+
+    try {
+      final entries =
+          await AppData
+              .loadPreviousTimetableFromFirestore();
+
+      if (!mounted) return;
+
+      setState(() {
+        previousTimetable =
+            entries;
+
+        loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        loading = false;
+        errorMessage =
+            e.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Previous Timetable',
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Refresh',
+            icon:
+                const Icon(Icons.refresh),
+            onPressed:
+                loadPreviousTimetable,
+          ),
+        ],
+      ),
+      body: loading
+          ? const Center(
+              child:
+                  CircularProgressIndicator(),
+            )
+          : errorMessage != null
+              ? Center(
+                  child: Padding(
+                    padding:
+                        const EdgeInsets
+                            .all(25),
+                    child: Column(
+                      mainAxisAlignment:
+                          MainAxisAlignment
+                              .center,
+                      children: [
+                        const Icon(
+                          Icons
+                              .error_outline,
+                          size: 60,
+                          color:
+                              Colors.red,
+                        ),
+                        const SizedBox(
+                          height: 15,
+                        ),
+                        const Text(
+                          'Could not load previous timetable.',
+                          textAlign:
+                              TextAlign
+                                  .center,
+                          style:
+                              TextStyle(
+                            fontSize: 18,
+                            fontWeight:
+                                FontWeight
+                                    .bold,
+                          ),
+                        ),
+                        const SizedBox(
+                          height: 10,
+                        ),
+                        Text(
+                          errorMessage!,
+                          textAlign:
+                              TextAlign
+                                  .center,
+                        ),
+                        const SizedBox(
+                          height: 20,
+                        ),
+                        ElevatedButton
+                            .icon(
+                          onPressed:
+                              loadPreviousTimetable,
+                          icon:
+                              const Icon(
+                            Icons.refresh,
+                          ),
+                          label:
+                              const Text(
+                            'Try Again',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : previousTimetable
+                      .isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment:
+                            MainAxisAlignment
+                                .center,
+                        children: [
+                          const Icon(
+                            Icons.history,
+                            size: 70,
+                            color:
+                                Colors.indigo,
+                          ),
+                          const SizedBox(
+                            height: 20,
+                          ),
+                          const Text(
+                            'No previous timetable available.',
+                            style:
+                                TextStyle(
+                              fontSize: 18,
+                            ),
+                          ),
+                          const SizedBox(
+                            height: 20,
+                          ),
+                          ElevatedButton
+                              .icon(
+                            onPressed:
+                                loadPreviousTimetable,
+                            icon:
+                                const Icon(
+                              Icons.refresh,
+                            ),
+                            label:
+                                const Text(
+                              'Refresh',
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : TimetableTable(
+                      timetable:
+                          previousTimetable,
+                    ),
+    );
+  }
+}
+
+// ============================================================
+// LECTURER LOGIN
+// ============================================================
+
+class LecturerLoginPage
+    extends StatefulWidget {
+  const LecturerLoginPage({
+    super.key,
+  });
+
+  @override
+  State<LecturerLoginPage>
+      createState() =>
+          _LecturerLoginPageState();
+}
+
+class _LecturerLoginPageState
+    extends State<
+        LecturerLoginPage> {
+  final emailController =
+      TextEditingController();
+
+  final passwordController =
+      TextEditingController();
+
+  bool loading = false;
+
+  Future<void> login() async {
+    final email =
+        emailController.text.trim();
+
+    final password =
+        passwordController.text.trim();
+
+    if (email.isEmpty ||
+        password.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Please enter email and password.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      loading = true;
+    });
+
+    try {
+      final credential =
+          await FirebaseAuth
+              .instance
+              .signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+
+      if (credential.user == null) {
+        throw Exception(
+          'User authentication failed.',
+        );
+      }
+
+      final query =
+          await FirebaseFirestore
+              .instance
+              .collection('users')
+              .where(
+                'email',
+                isEqualTo: email,
+              )
+              .limit(1)
+              .get();
+
+      if (query.docs.isEmpty) {
+        throw Exception(
+          'Lecturer user record not found in Firestore.',
+        );
+      }
+
+      final data =
+          query.docs.first.data();
+
+      if (data['role'] !=
+          'lecturer') {
+        throw Exception(
+          'This account is not a lecturer account.',
+        );
+      }
+
+      final lecturerName =
+          data['name']
+                  ?.toString()
+                  .trim() ??
+              '';
+
+      if (lecturerName.isEmpty) {
+        throw Exception(
+          'Lecturer name is missing from the Firestore user record.',
+        );
+      }
+
+      AppData.currentLecturerName =
+          lecturerName;
+
+      if (!mounted) return;
+
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) =>
+              const LecturerDashboard(),
+        ),
+      );
+    } on FirebaseAuthException catch (e) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        SnackBar(
+          content: Text(
+            e.message ??
+                'Login failed.',
+          ),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        SnackBar(
+          content: Text(
+            e.toString(),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          loading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    emailController.dispose();
+    passwordController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Lecturer Login',
+        ),
+      ),
+      body: Center(
+        child: SingleChildScrollView(
+          padding:
+              const EdgeInsets.all(30),
+          child: ConstrainedBox(
+            constraints:
+                const BoxConstraints(
+              maxWidth: 450,
+            ),
+            child: Column(
+              children: [
+                const Icon(
+                  Icons.person,
+                  size: 80,
+                  color:
+                      Colors.indigo,
+                ),
+                const SizedBox(
+                  height: 25,
+                ),
+                TextField(
+                  controller:
+                      emailController,
+                  decoration:
+                      const InputDecoration(
+                    labelText: 'Email',
+                    prefixIcon:
+                        Icon(Icons.email),
+                    border:
+                        OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(
+                  height: 15,
+                ),
+                TextField(
+                  controller:
+                      passwordController,
+                  obscureText: true,
+                  decoration:
+                      const InputDecoration(
+                    labelText:
+                        'Password',
+                    prefixIcon:
+                        Icon(Icons.lock),
+                    border:
+                        OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(
+                  height: 25,
+                ),
+                SizedBox(
+                  width:
+                      double.infinity,
+                  child:
+                      ElevatedButton(
+                    onPressed:
+                        loading
+                            ? null
+                            : login,
+                    child: loading
+                        ? const SizedBox(
+                            height: 22,
+                            width: 22,
+                            child:
+                                CircularProgressIndicator(
+                              strokeWidth:
+                                  2,
+                            ),
+                          )
+                        : const Text(
+                            'Login',
+                          ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// LECTURER DASHBOARD
+// ============================================================
+
+class LecturerDashboard
+    extends StatelessWidget {
+  const LecturerDashboard({
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Lecturer Dashboard',
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Logout',
+            onPressed: () async {
+              await FirebaseAuth
+                  .instance
+                  .signOut();
+
+              AppData.currentLecturerName =
+                  '';
+
+              if (!context.mounted) return;
+
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      const HomePage(),
+                ),
+                (route) => false,
+              );
+            },
+            icon:
+                const Icon(Icons.logout),
+          ),
+        ],
+      ),
+      body: Padding(
+        padding:
+            const EdgeInsets.all(25),
+        child: Column(
+          children: [
+            Card(
+              child: ListTile(
+                leading:
+                    const CircleAvatar(
+                  child:
+                      Icon(Icons.person),
+                ),
+                title: Text(
+                  AppData
+                          .currentLecturerName
+                          .isEmpty
+                      ? 'Lecturer'
+                      : AppData
+                          .currentLecturerName,
+                ),
+                subtitle:
+                    const Text(
+                  'Lecturer Portal',
+                ),
+              ),
+            ),
+            const SizedBox(
+              height: 20,
+            ),
+            Expanded(
+              child: GridView.count(
+                crossAxisCount:
+                    MediaQuery.of(context)
+                                .size
+                                .width >
+                            700
+                        ? 2
+                        : 1,
+                crossAxisSpacing: 20,
+                mainAxisSpacing: 20,
+                children: [
+                  _DashboardCard(
+                    title:
+                        'My Timetable',
+                    icon: Icons
+                        .calendar_month,
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              const LecturerTimetablePage(),
+                        ),
+                      );
+                    },
+                  ),
+                  _DashboardCard(
+                    title: 'My Profile',
+                    icon:
+                        Icons.person,
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              const LecturerProfilePage(),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// DASHBOARD CARD
+// ============================================================
+
+class _DashboardCard
+    extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const _DashboardCard({
+    required this.title,
+    required this.icon,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 4,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius:
+            BorderRadius.circular(12),
+        child: Column(
+          mainAxisAlignment:
+              MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 60,
+              color: Colors.indigo,
+            ),
+            const SizedBox(
+              height: 15,
+            ),
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight:
+                    FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// LECTURER TIMETABLE
+// ============================================================
+
+class LecturerTimetablePage
+    extends StatefulWidget {
+  const LecturerTimetablePage({
+    super.key,
+  });
+
+  @override
+  State<LecturerTimetablePage>
+      createState() =>
+          _LecturerTimetablePageState();
+}
+
+class _LecturerTimetablePageState
+    extends State<
+        LecturerTimetablePage> {
+  List<TimetableEntry> entries =
+      [];
+
+  bool loading = true;
+
+  String? error;
+
+  @override
+  void initState() {
+    super.initState();
+    loadTimetable();
+  }
+
+  Future<void> loadTimetable() async {
+    setState(() {
+      loading = true;
+      error = null;
+    });
+
+    try {
+      final user =
+          FirebaseAuth.instance.currentUser;
+
+      if (user == null) {
+        throw Exception(
+          'No lecturer is logged in.',
+        );
+      }
+
+      final query =
+          await FirebaseFirestore
+              .instance
+              .collection('users')
+              .where(
+                'email',
+                isEqualTo: user.email,
+              )
+              .limit(1)
+              .get();
+
+      if (query.docs.isEmpty) {
+        throw Exception(
+          'Lecturer record not found.',
+        );
+      }
+
+      final data =
+          query.docs.first.data();
+
+      final lecturerName =
+          data['name']
+                  ?.toString()
+                  .trim() ??
+              '';
+
+      if (lecturerName.isEmpty) {
+        throw Exception(
+          'Lecturer name is missing from Firestore.',
+        );
+      }
+
+      AppData.currentLecturerName =
+          lecturerName;
+
+      await AppData
+          .loadConfirmedTimetableFromFirestore();
+
+      final filtered =
+          AppData.confirmedTimetable
+              .where(
+        (entry) {
+          return entry.lecturer
+                  .trim()
+                  .toLowerCase() ==
+              lecturerName
+                  .trim()
+                  .toLowerCase();
+        },
+      ).toList();
+
+      if (!mounted) return;
+
+      setState(() {
+        entries = filtered;
+        loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        loading = false;
+        error = e.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'My Timetable',
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Refresh',
+            onPressed: loadTimetable,
+            icon:
+                const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      body: loading
+          ? const Center(
+              child:
+                  CircularProgressIndicator(),
+            )
+          : error != null
+              ? Center(
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.all(
+                      25,
+                    ),
+                    child: Column(
+                      mainAxisAlignment:
+                          MainAxisAlignment
+                              .center,
+                      children: [
+                        const Icon(
+                          Icons
+                              .error_outline,
+                          size: 60,
+                          color:
+                              Colors.red,
+                        ),
+                        const SizedBox(
+                          height: 15,
+                        ),
+                        Text(
+                          error!,
+                          textAlign:
+                              TextAlign
+                                  .center,
+                        ),
+                        const SizedBox(
+                          height: 20,
+                        ),
+                        ElevatedButton
+                            .icon(
+                          onPressed:
+                              loadTimetable,
+                          icon:
+                              const Icon(
+                            Icons.refresh,
+                          ),
+                          label:
+                              const Text(
+                            'Try Again',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : entries.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding:
+                            const EdgeInsets
+                                .all(25),
+                        child: Column(
+                          mainAxisAlignment:
+                              MainAxisAlignment
+                                  .center,
+                          children: [
+                            const Icon(
+                              Icons
+                                  .calendar_month,
+                              size: 70,
+                              color: Colors
+                                  .indigo,
+                            ),
+                            const SizedBox(
+                              height: 20,
+                            ),
+                            Text(
+                              'No timetable available for '
+                              '${AppData.currentLecturerName}.',
+                              textAlign:
+                                  TextAlign
+                                      .center,
+                              style:
+                                  const TextStyle(
+                                fontSize: 18,
+                              ),
+                            ),
+                            const SizedBox(
+                              height: 15,
+                            ),
+                            const Text(
+                              'Generate and confirm a new timetable '
+                              'to assign classes to lecturers.',
+                              textAlign:
+                                  TextAlign
+                                      .center,
+                            ),
+                            const SizedBox(
+                              height: 20,
+                            ),
+                            ElevatedButton
+                                .icon(
+                              onPressed:
+                                  loadTimetable,
+                              icon:
+                                  const Icon(
+                                Icons.refresh,
+                              ),
+                              label:
+                                  const Text(
+                                'Refresh',
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : Column(
+                      children: [
+                        Padding(
+                          padding:
+                              const EdgeInsets
+                                  .all(15),
+                          child: Card(
+                            child:
+                                ListTile(
+                              leading:
+                                  const CircleAvatar(
+                                child:
+                                    Icon(
+                                  Icons
+                                      .person,
+                                ),
+                              ),
+                              title:
+                                  const Text(
+                                'Lecturer',
+                              ),
+                              subtitle:
+                                  Text(
+                                AppData
+                                    .currentLecturerName,
+                              ),
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child:
+                              TimetableTable(
+                            timetable:
+                                entries,
+                          ),
+                        ),
+                      ],
+                    ),
+    );
+  }
+}
+
+// ============================================================
+// LECTURER PROFILE
+// ============================================================
+
+class LecturerProfilePage
+    extends StatefulWidget {
+  const LecturerProfilePage({
+    super.key,
+  });
+
+  @override
+  State<LecturerProfilePage>
+      createState() =>
+          _LecturerProfilePageState();
+}
+
+class _LecturerProfilePageState
+    extends State<
+        LecturerProfilePage> {
+  final newPasswordController =
+      TextEditingController();
+
+  bool loading = false;
+
+  Future<void> changePassword() async {
+    final password =
+        newPasswordController
+            .text
+            .trim();
+
+    if (password.length < 6) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Password must be at least 6 characters.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final user =
+        FirebaseAuth.instance.currentUser;
+
+    if (user == null) return;
+
+    setState(() {
+      loading = true;
+    });
+
+    try {
+      await user.updatePassword(
+        password,
+      );
+
+      newPasswordController.clear();
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Password changed successfully.',
+          ),
+        ),
+      );
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        SnackBar(
+          content: Text(
+            e.message ??
+                'Could not change password.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        SnackBar(
+          content: Text(
+            e.toString(),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          loading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    newPasswordController
+        .dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user =
+        FirebaseAuth.instance.currentUser;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'My Profile',
+        ),
+      ),
+      body: Center(
+        child: SingleChildScrollView(
+          padding:
+              const EdgeInsets.all(30),
+          child: ConstrainedBox(
+            constraints:
+                const BoxConstraints(
+              maxWidth: 500,
+            ),
+            child: Column(
+              children: [
+                const CircleAvatar(
+                  radius: 45,
+                  child: Icon(
+                    Icons.person,
+                    size: 50,
+                  ),
+                ),
+                const SizedBox(
+                  height: 20,
+                ),
+                Text(
+                  AppData
+                          .currentLecturerName
+                          .isEmpty
+                      ? 'Lecturer'
+                      : AppData
+                          .currentLecturerName,
+                  textAlign:
+                      TextAlign.center,
+                  style:
+                      const TextStyle(
+                    fontSize: 24,
+                    fontWeight:
+                        FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(
+                  height: 10,
+                ),
+                Text(
+                  user?.email ??
+                      'No email',
+                  textAlign:
+                      TextAlign.center,
+                  style:
+                      const TextStyle(
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(
+                  height: 30,
+                ),
+                TextField(
+                  controller:
+                      newPasswordController,
+                  obscureText: true,
+                  decoration:
+                      const InputDecoration(
+                    labelText:
+                        'New Password',
+                    prefixIcon:
+                        Icon(Icons.lock),
+                    border:
+                        OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(
+                  height: 20,
+                ),
+                SizedBox(
+                  width:
+                      double.infinity,
+                  child:
+                      ElevatedButton(
+                    onPressed: loading
+                        ? null
+                        : changePassword,
+                    child: loading
+                        ? const SizedBox(
+                            height: 22,
+                            width: 22,
+                            child:
+                                CircularProgressIndicator(
+                              strokeWidth:
+                                  2,
+                            ),
+                          )
+                        : const Text(
+                            'Change Password',
+                          ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// TIMETABLE TABLE
+// ============================================================
+
+class TimetableTable
+    extends StatelessWidget {
+  final List<TimetableEntry>
+      timetable;
+
+  const TimetableTable({
+    super.key,
+    required this.timetable,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (timetable.isEmpty) {
+      return const Center(
+        child: Text(
+          'No timetable entries.',
+          style: TextStyle(
+            fontSize: 18,
+          ),
+        ),
+      );
+    }
+
+    return SingleChildScrollView(
+      padding:
+          const EdgeInsets.all(20),
+      scrollDirection:
+          Axis.horizontal,
+      child: DataTable(
+        headingRowColor:
+            WidgetStatePropertyAll(
+          Colors.indigo.shade50,
+        ),
+        columns: const [
+          DataColumn(
+            label: Text('Class'),
+          ),
+          DataColumn(
+            label: Text('Subject'),
+          ),
+          DataColumn(
+            label: Text('Lecturer'),
+          ),
+          DataColumn(
+            label: Text('Room'),
+          ),
+          DataColumn(
+            label: Text('Day'),
+          ),
+          DataColumn(
+            label: Text('Time'),
+          ),
+        ],
+        rows: timetable.map(
+          (entry) {
+            return DataRow(
+              cells: [
+                DataCell(
+                  Text(
+                    entry.className,
+                  ),
+                ),
+                DataCell(
+                  Text(
+                    entry.subject,
+                  ),
+                ),
+                DataCell(
+                  Text(
+                    entry.lecturer,
+                  ),
+                ),
+                DataCell(
+                  Text(
+                    entry.room,
+                  ),
+                ),
+                DataCell(
+                  Text(
+                    entry.day,
+                  ),
+                ),
+                DataCell(
+                  Text(
+                    entry.time,
+                  ),
+                ),
+              ],
+            );
+          },
+        ).toList(),
+      ),
+    );
+  }
+}
